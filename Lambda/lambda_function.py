@@ -1,6 +1,10 @@
 ### Required Libraries ###
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
 
 ### Functionality Helper Functions ###
 def parse_int(n):
@@ -25,6 +29,7 @@ def build_validation_result(is_valid, violated_slot, message_content):
         "violatedSlot": violated_slot,
         "message": {"contentType": "PlainText", "content": message_content},
     }
+    
 
 
 ### Dialog Actions Helper Functions ###
@@ -50,7 +55,6 @@ def elicit_slot(session_attributes, intent_name, slots, slot_to_elicit, message)
             "message": message,
         },
     }
-
 
 def delegate(session_attributes, slots):
     """
@@ -113,6 +117,52 @@ In this section, you will create an Amazon Lambda function that will validate th
 
 
 ### Intents Handlers ###
+
+def validate_data(age, investment_amount, intent_request):
+    
+    """
+    Validates data provided by user
+    """
+    
+    # Validate user between 0 and 65 years old
+    if age is not None:
+        age = parse_int(age)
+        if age <= 0 or age > 65:
+            return build_validation_result(
+                False,
+                "age",
+                "This service is for people less that 65, "
+                "please speak with an adviser."
+            ) 
+
+    # Validate amounts over 5000
+    if investment_amount is not None:
+        investment_amount = parse_int(investment_amount)
+        if investment_amount < 5000:
+            return build_validation_result(
+                False,
+                "investmentAmount",
+                "We recommend a minimum investment value of $5,000,"
+                "please provide a different investment amount."
+            )
+    
+    # return true if validations are passed
+    return build_validation_result(True, None, None)
+
+def portfolio_map(risk_level):
+    
+    risk_map = {
+        "None":"100% bonds (AGG), 0% equities (SPY)",
+        "Low": "60% bonds (AGG), 40% equities (SPY)",
+        "Medium": "40% bonds (AGG), 60% equities (SPY)",
+        "High":"20% bonds (AGG), 80% equities (SPY)"
+    }
+    
+    if risk_level is not None:
+        portfolio = risk_map[risk_level]
+    
+    return portfolio
+    
 def recommend_portfolio(intent_request):
     """
     Performs dialog management and fulfillment for recommending a portfolio.
@@ -125,6 +175,51 @@ def recommend_portfolio(intent_request):
     source = intent_request["invocationSource"]
 
     # YOUR CODE GOES HERE!
+    
+    
+    # Get invocation source from Lex
+    source = intent_request['invocationSource']
+    
+    if source == "DialogCodeHook":
+        
+        # get slots
+        slots = get_slots(intent_request)
+
+        # validate slots
+        validation_result = validate_data(age, investment_amount, intent_request)
+        
+         # If the user inputs are not valid, clean slot
+        if not validation_result["isValid"]:
+            slots[validation_result["violatedSlot"]] = None
+
+            # Provide info on slot violation
+            return elicit_slot(
+                intent_request["sessionAttributes"],
+                intent_request["currentIntent"]["name"],
+                slots,
+                validation_result["violatedSlot"],
+                validation_result["message"],
+            )
+
+        # Fetch current session attributes
+        output_session_attributes = intent_request["sessionAttributes"]
+
+        # Once all slots are valid, a delegate dialog is returned to Lex to choose the next course of action.
+        return delegate(output_session_attributes, get_slots(intent_request))
+
+    # message with results
+    return close(
+        intent_request["sessionAttributes"],
+        "Fulfilled",
+        {
+            "contentType": "PlainText",
+            "content": """ We recommend you invest
+            in a portfolio made up of {}.
+            """.format(
+                portfolio_map(risk_level)
+            ),
+        },
+    )
 
 
 ### Intents Dispatcher ###
@@ -149,4 +244,7 @@ def lambda_handler(event, context):
     The JSON body of the request is provided in the event slot.
     """
 
-    return dispatch(event)
+    logger.debug('event={}'.format(event))
+    response = dispatch(event)
+    logger.debug(response)
+    return response
